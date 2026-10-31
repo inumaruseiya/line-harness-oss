@@ -26,6 +26,7 @@ import { replyViaHarnessProxy } from '../services/line-proxy-send.js';
 import type { HarnessProxyDispatch } from '../services/line-proxy-send.js';
 import { dispatchLineProxyLocally } from '../services/local-line-proxy.js';
 import { ensureSchedulerArmed } from '../durable-objects/tenant-scheduler.js';
+import { notifyStaffOfIncomingMessage } from '../services/web-push.js';
 
 const webhook = new Hono<Env>();
 
@@ -73,6 +74,32 @@ async function ensureFriendFromWebhookUser(
   }
 
   return friend;
+}
+
+/** LINEスタイルのリッチプッシュ通知をスタッフに送る。VAPID未設定なら無音でno-op。 */
+async function pushNotifyIncomingMessage(
+  db: D1Database,
+  gateEnv: Env['Bindings'] | undefined,
+  friend: Friend,
+  lineAccountId: string | null,
+  bodyText: string,
+  waitUntil: (p: Promise<unknown>) => void,
+): Promise<void> {
+  if (!gateEnv) return;
+  const title = friend.nickname || friend.display_name || 'LINE友だち';
+  await notifyStaffOfIncomingMessage(
+    db,
+    gateEnv,
+    lineAccountId,
+    {
+      title,
+      body: bodyText,
+      icon: friend.picture_url ?? undefined,
+      url: `/chats?friend=${friend.id}`,
+      tag: `chat-${friend.id}`,
+    },
+    waitUntil,
+  );
 }
 
 webhook.post('/webhook', async (c) => {
@@ -179,6 +206,7 @@ webhook.post('/webhook', async (c) => {
           c.env.IMAGES,
           proxyDispatch,
           c.env,
+          (p) => c.executionCtx.waitUntil(p),
         );
       } catch (err) {
         console.error('Error handling webhook event:', err);
@@ -208,6 +236,7 @@ async function handleEvent(
   r2?: R2Bucket,
   proxyDispatch?: HarnessProxyDispatch,
   gateEnv?: Env['Bindings'],
+  waitUntil: (p: Promise<unknown>) => void = () => {},
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -434,6 +463,7 @@ async function handleEvent(
     // メニュータップで誤発火し、条件側に source を見る術がないため。
     // なお upsertChatOnMessage は呼ばない: メニュータップは自発メッセージでは
     // ないので、未対応 inbox を汚さないのが正しい (テキスト経路との意図的な差分)。
+    // 同様の理由で push 通知も発火しない。
     await fireEvent(db, 'postback_received', {
       friendId: friend.id,
       eventData: { text: postbackData, matched: postbackMatched },
@@ -518,6 +548,7 @@ async function handleEvent(
     // 画像だけ送ってきた友だち」をバッジ・未対応一覧から永久に落としてしまう。
     // 非 text は auto_reply keyword にマッチし得ないので常に要対応扱いで正しい。
     await upsertChatOnMessage(db, friend.id);
+    await pushNotifyIncomingMessage(db, gateEnv, friend, lineAccountId, content, waitUntil);
     return;
   }
 
@@ -630,9 +661,11 @@ async function handleEvent(
       },
     );
 
-    // auto_replies にマッチしなかった = 自発メッセージ → unread にする
+    // auto_replies にマッチしなかった = 自発メッセージ → unread にする + push通知
     if (!matched) {
       await upsertChatOnMessage(db, friend.id);
+      const previewText = incomingText.length > 120 ? `${incomingText.slice(0, 120)}…` : incomingText;
+      await pushNotifyIncomingMessage(db, gateEnv, friend, lineAccountId, previewText, waitUntil);
     }
 
     // イベントバス発火: message_received

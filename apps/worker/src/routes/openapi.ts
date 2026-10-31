@@ -1043,6 +1043,50 @@ const spec = {
     '/api/webinars/{id}/user-comments': {
       get: { tags: ['Webinars'], summary: '視聴者の生コメント一覧', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { '200': { description: 'Comments' } } },
     },
+    // ── Push Notifications ──────────────────────────────────────────────────
+    '/api/push/vapid-public-key': {
+      get: {
+        tags: ['Push Notifications'],
+        summary: 'VAPID公開鍵取得',
+        description: 'ブラウザの pushManager.subscribe() に渡す applicationServerKey。サーバーでVAPID鍵が未設定の場合は503。',
+        responses: { '200': { description: 'Public key' }, '503': { description: 'Push未設定' } },
+      },
+    },
+    '/api/push/subscriptions': {
+      post: {
+        tags: ['Push Notifications'],
+        summary: '通知購読を登録',
+        description: 'ログイン中スタッフの購読(endpoint/p256dh/auth)をupsertする。再購読時は同じendpointの行を更新。',
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['endpoint', 'keys'],
+                properties: {
+                  endpoint: { type: 'string' },
+                  keys: {
+                    type: 'object',
+                    required: ['p256dh', 'auth'],
+                    properties: { p256dh: { type: 'string' }, auth: { type: 'string' } },
+                  },
+                  lineAccountId: { type: 'string', nullable: true, description: '省略/nullで全アカウント通知' },
+                },
+              },
+            },
+          },
+        },
+        responses: { '201': { description: 'Subscribed' }, '400': { description: 'Missing fields' }, '401': { description: 'Unauthorized' } },
+      },
+      delete: {
+        tags: ['Push Notifications'],
+        summary: '通知購読を解除',
+        requestBody: {
+          content: { 'application/json': { schema: { type: 'object', required: ['endpoint'], properties: { endpoint: { type: 'string' } } } } },
+        },
+        responses: { '200': { description: 'Unsubscribed' }, '400': { description: 'Missing endpoint' }, '401': { description: 'Unauthorized' } },
+      },
+    },
     '/webhook': {
       post: {
         tags: ['Webhook'],
@@ -1065,6 +1109,7 @@ const spec = {
     { name: 'Forms', description: 'フォーム（LIFF 内で回答）' },
     { name: 'Links', description: '流入経路(/r) とクリック計測(/t) — 役割が違うので取り違えないこと' },
     { name: 'Webinars', description: 'オートウェビナー（動画・CTA・コメント・分析）' },
+    { name: 'Push Notifications', description: 'ブラウザ向けWeb Pushリッチ通知の購読管理' },
     { name: 'Webhook', description: 'LINE Webhook' },
   ],
 };

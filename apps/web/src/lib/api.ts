@@ -1024,6 +1024,20 @@ export const api = {
         body: JSON.stringify(data),
       }),
   },
+  push: {
+    getVapidPublicKey: () =>
+      fetchApi<ApiResponse<{ publicKey: string }>>('/api/push/vapid-public-key'),
+    subscribe: (data: { endpoint: string; keys: { p256dh: string; auth: string }; lineAccountId?: string | null }) =>
+      fetchApi<ApiResponse<unknown>>('/api/push/subscriptions', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    unsubscribe: (endpoint: string) =>
+      fetchApi<ApiResponse<unknown>>('/api/push/subscriptions', {
+        method: 'DELETE',
+        body: JSON.stringify({ endpoint }),
+      }),
+  },
   reminders: {
     list: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''

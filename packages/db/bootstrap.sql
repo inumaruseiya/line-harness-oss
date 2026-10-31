@@ -255,6 +255,23 @@ CREATE TABLE IF NOT EXISTS chats (
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 , line_account_id TEXT);
 
+-- Web Push subscriptions (migration 076). See 076_push_subscriptions.sql.
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id              TEXT PRIMARY KEY,
+  staff_id        TEXT NOT NULL,
+  line_account_id TEXT,
+  endpoint        TEXT NOT NULL,
+  p256dh          TEXT NOT NULL,
+  auth            TEXT NOT NULL,
+  user_agent      TEXT,
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_endpoint ON push_subscriptions (endpoint);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_staff ON push_subscriptions (staff_id);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_line_account ON push_subscriptions (line_account_id);
+
 CREATE TABLE IF NOT EXISTS conversion_events (
   id                   TEXT PRIMARY KEY,
   conversion_point_id  TEXT NOT NULL REFERENCES conversion_points (id) ON DELETE CASCADE,

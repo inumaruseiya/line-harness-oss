@@ -725,6 +725,24 @@ CREATE TABLE IF NOT EXISTS chats (
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
+-- Web Push subscriptions (migration 076). line_account_id NULL = notify for
+-- every LINE account (staff_members has no per-account scoping in this schema).
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id              TEXT PRIMARY KEY,
+  staff_id        TEXT NOT NULL,
+  line_account_id TEXT,
+  endpoint        TEXT NOT NULL,
+  p256dh          TEXT NOT NULL,
+  auth            TEXT NOT NULL,
+  user_agent      TEXT,
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_endpoint ON push_subscriptions (endpoint);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_staff ON push_subscriptions (staff_id);
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_line_account ON push_subscriptions (line_account_id);
+
 -- 1 friend = 1 chat 行 (048_chats_friend_unique)。
 -- schema.sql は既存 DB への差分適用 (pnpm db:migrate) にも使われるため、UNIQUE
 -- インデックス作成前に旧重複行を最新行へ寄せる。新規 DB では no-op。

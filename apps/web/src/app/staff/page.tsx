@@ -14,6 +14,7 @@ import { Loader } from '@cloudflare/kumo/components/loader'
 import { Select } from '@cloudflare/kumo/components/select'
 import { Table } from '@cloudflare/kumo/components/table'
 import Header from '@/components/layout/header'
+import PushNotificationSettings from '@/components/staff/push-notification-settings'
 import { fetchApi } from '@/lib/api'
 import type { ApiResponse, StaffMember } from '@line-crm/shared'
 
@@ -144,6 +145,8 @@ export default function StaffPage() {
           </Button>
         )}
       />
+
+      <PushNotificationSettings />
 
       {newKey ? (
         <LayerCard className="mb-6 p-5">

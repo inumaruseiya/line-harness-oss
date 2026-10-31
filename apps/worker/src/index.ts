@@ -41,6 +41,7 @@ import { reminders } from './routes/reminders.js';
 import { scoring } from './routes/scoring.js';
 import { templates } from './routes/templates.js';
 import { chats } from './routes/chats.js';
+import { pushSubscriptions } from './routes/push-subscriptions.js';
 import { conversations } from './routes/conversations.js';
 // notifications ルート: 一度インボックス機能 (/api/inbox/unanswered) に置き換えて
 // 削除したが、クォータ不足通知 (services/quota-alert.ts, 2026-09-01 事故対応) が
@@ -156,6 +157,14 @@ export type Env = {
     QUOTA_MONTHLY_MESSAGES_MAX?: string;
     /** Optional URL shown to admins when a quota is exceeded. */
     QUOTA_NOTICE_URL?: string;
+    // Web Push (RFC 8292 VAPID). One key pair for the whole deployment, stored
+    // as secrets via `wrangler secret put`; see docs/PUSH-NOTIFICATIONS.md for
+    // generation instructions. Optional at the type level so the rest of the
+    // worker still type-checks/boots when unset — services/web-push.ts guards
+    // on their presence at runtime and silently no-ops the feature otherwise.
+    VAPID_PUBLIC_KEY?: string;
+    VAPID_PRIVATE_KEY?: string;
+    VAPID_SUBJECT?: string;
     // 分・6時間の定期ジョブを自走させる DO。バインディング名 TENANT_SCHEDULER は
     // テナントを自動プロビジョニングする側 (scripts/lib/tenant-wrangler.ts) にも
     // 同名で書いてあり、ここと食い違うと「デプロイは成功するがアラームは一生
@@ -236,6 +245,7 @@ app.route('/', reminders);
 app.route('/', scoring);
 app.route('/', templates);
 app.route('/', chats);
+app.route('/', pushSubscriptions);
 app.route('/', notifications);
 app.route('/', conversations);
 app.route('/', stripe);
