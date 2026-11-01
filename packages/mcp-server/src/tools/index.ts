@@ -30,6 +30,11 @@ import { registerManageMessageTemplates } from "./manage-message-templates.js";
 import { registerListConversations } from "./list-conversations.js";
 import { registerGetConversation } from "./get-conversation.js";
 import { registerManageWebinarVideo } from "./manage-webinar-video.js";
+import { registerListEvents } from "./list-events.js";
+import { registerGetEvent } from "./get-event.js";
+import { registerCreateEvent } from "./create-event.js";
+import { registerManageEvents } from "./manage-events.js";
+import { registerManageEventBookings } from "./manage-event-bookings.js";
 
 export function registerAllTools(server: McpServer): void {
   registerSendMessage(server);
@@ -63,4 +68,9 @@ export function registerAllTools(server: McpServer): void {
   registerListConversations(server);
   registerGetConversation(server);
   registerManageWebinarVideo(server);
+  registerListEvents(server);
+  registerGetEvent(server);
+  registerCreateEvent(server);
+  registerManageEvents(server);
+  registerManageEventBookings(server);
 }
