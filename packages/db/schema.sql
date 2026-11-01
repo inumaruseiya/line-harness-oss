@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS friends (
   id               TEXT PRIMARY KEY,
   line_user_id     TEXT UNIQUE NOT NULL,
   display_name     TEXT,
+  nickname         TEXT,
   picture_url      TEXT,
   status_message   TEXT,
   is_following     INTEGER NOT NULL DEFAULT 1,
@@ -724,6 +725,18 @@ CREATE TABLE IF NOT EXISTS chats (
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
+
+-- Per-staff read state (migration 075). chats.status stays the shared
+-- operator-managed state; this table says when a particular staff member last
+-- opened the chat so 未読/既読 can be computed per viewer.
+CREATE TABLE IF NOT EXISTS chat_read_states (
+  chat_id      TEXT NOT NULL REFERENCES chats (id) ON DELETE CASCADE,
+  staff_id     TEXT NOT NULL,
+  last_read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  PRIMARY KEY (chat_id, staff_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_read_states_staff ON chat_read_states (staff_id);
 
 -- Web Push subscriptions (migration 076). line_account_id NULL = notify for
 -- every LINE account (staff_members has no per-account scoping in this schema).

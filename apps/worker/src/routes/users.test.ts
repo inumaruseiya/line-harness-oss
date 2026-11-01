@@ -69,7 +69,7 @@ const routes: Array<{
   },
   {
     method: 'GET', path: '/api/users/user-1/accounts', operation: dbMocks.getUserFriends,
-    args: ['user-1'], data: [{ id: 'friend-1', lineUserId: 'U1', displayName: 'Friend', isFollowing: true }],
+    args: ['user-1'], data: [{ id: 'friend-1', lineUserId: 'U1', displayName: 'Friend', nickname: null, isFollowing: true }],
   },
   {
     method: 'POST', path: '/api/users/match', body: { email: userRow.email },
@@ -123,7 +123,8 @@ beforeEach(() => {
   dbMocks.updateUser.mockResolvedValue(userRow);
   dbMocks.getUserByEmail.mockResolvedValue(userRow);
   dbMocks.getUserFriends.mockResolvedValue([
-    { id: 'friend-1', line_user_id: 'U1', display_name: 'Friend', is_following: 1 },
+    // nickname mirrors migration 074; routes coalesce it into displayName.
+    { id: 'friend-1', line_user_id: 'U1', display_name: 'Friend', nickname: null, is_following: 1 },
   ]);
   groupedMocks.computeUsersGrouped.mockResolvedValue(groupedData);
 });

@@ -3,6 +3,12 @@ export interface Friend {
   id: string;
   line_user_id: string;
   display_name: string | null;
+  /**
+   * Operator-assigned management name (migration 074). Queries that select
+   * explicit column lists may omit this column — consumers must treat the
+   * field as optional and fall back to display_name.
+   */
+  nickname?: string | null;
   picture_url: string | null;
   status_message: string | null;
   is_following: number;
@@ -268,6 +274,29 @@ export async function updateFriendFollowStatus(
         WHERE line_user_id = ?`,
     )
     .bind(now, now, lineUserId)
+    .run();
+}
+
+/**
+ * Persist the operator-assigned management name (管理名) for a friend.
+ *
+ * Passing null (or an empty string) clears the nickname so the friend's LINE
+ * profile display_name becomes visible again. Deliberately never touches
+ * display_name — follow-webhook profile upserts and the profile-refresh batch
+ * keep overwriting that column with data from the LINE API.
+ */
+export async function updateFriendNickname(
+  db: D1Database,
+  friendId: string,
+  nickname: string | null,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE friends
+          SET nickname = ?, updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(nickname, jstNow(), friendId)
     .run();
 }
 

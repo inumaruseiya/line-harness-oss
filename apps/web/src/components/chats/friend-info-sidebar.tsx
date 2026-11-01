@@ -3,11 +3,15 @@
 import { useState, useEffect } from 'react'
 import { api, type MileageHistoryItem, type MileageSummary } from '@/lib/api'
 import { Button } from '@cloudflare/kumo/components/button'
-import { InputArea } from '@cloudflare/kumo/components/input'
+import { Input, InputArea } from '@cloudflare/kumo/components/input'
 
 interface FriendDetail {
   id: string
   displayName: string | null
+  /** 運営側管理名 (null = LINE表示名をそのまま表示) */
+  nickname: string | null
+  /** LINE側の生表示名 (管理名設定時の上書き対象) */
+  lineName: string | null
   pictureUrl: string | null
   isFollowing: boolean
   metadata: Record<string, unknown>
@@ -40,6 +44,8 @@ interface Props {
   onNotesChange?: (value: string) => void
   onSaveNotes?: () => void
   savingNotes?: boolean
+  /** 管理名 (nickname) 保存後、親にチャット詳細の再読込を促す */
+  onFriendUpdated?: () => void
 }
 
 function formatDate(iso: string | null): string {
@@ -66,7 +72,7 @@ function renderValue(value: unknown): string {
   }
 }
 
-export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, notesValue, onNotesChange, onSaveNotes, savingNotes }: Props) {
+export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, notesValue, onNotesChange, onSaveNotes, savingNotes, onFriendUpdated }: Props) {
   const [friend, setFriend] = useState<FriendDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -75,6 +81,30 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
     | { kind: 'error' }
     | { kind: 'data'; summary: MileageSummary; history: MileageHistoryItem[] }
   const [mileage, setMileage] = useState<MileageState>({ kind: 'loading' })
+  // 管理名 (nickname) のインライン編集。保存に成功したら friend 詳細を再取得し、
+  // 親にも再読込を促してチャットヘッダー等の表示を最新化する。
+  const [editingNickname, setEditingNickname] = useState(false)
+  const [nicknameDraft, setNicknameDraft] = useState('')
+  const [nicknameSaving, setNicknameSaving] = useState(false)
+
+  const saveNickname = async () => {
+    if (!friend || nicknameSaving) return
+    setNicknameSaving(true)
+    try {
+      const res = await api.friends.setDisplayName(friend.id, nicknameDraft)
+      if (res.success) {
+        setEditorStateFrom(res.data as unknown as FriendDetail)
+        setEditingNickname(false)
+        onFriendUpdated?.()
+      }
+    } catch { /* silent — 操作側の再試行に委ねる */ }
+    setNicknameSaving(false)
+  }
+
+  function setEditorStateFrom(updated: FriendDetail) {
+    setFriend(updated)
+    setNicknameDraft(updated.nickname ?? '')
+  }
 
   useEffect(() => {
     if (!friendId) {
@@ -183,6 +213,11 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
               )}
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-gray-900 truncate">{friend.displayName || '名前なし'}</p>
+                {friend.nickname && friend.lineName && (
+                  <p className="text-[10px] text-gray-400 mt-0.5 truncate" title={friend.lineName}>
+                    LINE表示名: {friend.lineName}
+                  </p>
+                )}
                 <p className="text-[11px] text-gray-400 mt-0.5">
                   登録日: {formatDate(friend.createdAt)}
                 </p>
@@ -190,6 +225,53 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
                   <span className="inline-block mt-1 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
                     ブロック済
                   </span>
+                )}
+                {/* 管理名インライン編集。展開中は本文をやめて input へ変える */}
+                {editingNickname ? (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <Input
+                      size="sm"
+                      type="text"
+                      value={nicknameDraft}
+                      onChange={(e) => setNicknameDraft(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveNickname() } if (e.key === 'Escape') setEditingNickname(false) }}
+                      placeholder="空欄で保存するとLINE表示名に戻る"
+                      aria-label="管理名"
+                      autoFocus
+                      maxLength={100}
+                      className="w-full min-w-0 flex-1"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="primary"
+                      onClick={() => { void saveNickname() }}
+                      disabled={nicknameSaving}
+                      loading={nicknameSaving}
+                      className="flex-shrink-0"
+                    >
+                      保存
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setEditingNickname(false)}
+                      className="flex-shrink-0"
+                    >
+                      閉じる
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    className="mt-1 px-0 text-gray-500 hover:text-gray-800"
+                    onClick={() => { setNicknameDraft(friend.nickname ?? ''); setEditingNickname(true) }}
+                  >
+                    ✎ 管理名を編集
+                  </Button>
                 )}
               </div>
             </div>

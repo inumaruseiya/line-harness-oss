@@ -145,7 +145,8 @@ users.get('/api/users/:id/accounts', requireRole('owner', 'admin'), async (c) =>
       data: friends.map((f) => ({
         id: f.id,
         lineUserId: f.line_user_id,
-        displayName: f.display_name,
+        displayName: f.nickname ?? f.display_name,
+        nickname: f.nickname ?? null,
         isFollowing: Boolean(f.is_following),
       })),
     });

@@ -292,6 +292,16 @@ const spec = {
         responses: { '200': { description: 'Tag removed' } },
       },
     },
+    '/api/friends/{id}/display-name': {
+      put: {
+        tags: ['Friends'],
+        summary: '友だちの管理名(nickname)を設定',
+        description: 'LINEでは運営側の友だち名変更がAPIに露出しないため、L Harness内の管理名として保存する。nullまたは空文字で解除し、LINE表示名に戻る。displayNameの応答はnickname ?? display_name。フォロー時のプロフィール更新では上書きされない。',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { nickname: { type: 'string', nullable: true, maxLength: 100 } }, required: ['nickname'] } } } },
+        responses: { '200': { description: 'Updated friend' }, '404': { description: 'Not found' }, '422': { description: 'Nickname too long' } },
+      },
+    },
     // ── Tags ────────────────────────────────────────────────────────────────
     '/api/tags': {
       get: { tags: ['Tags'], summary: 'タグ一覧取得', responses: { '200': { description: 'All tags' } } },

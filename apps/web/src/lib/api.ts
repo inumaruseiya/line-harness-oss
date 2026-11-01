@@ -156,11 +156,13 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
  */
 export class ApiError extends Error {
   readonly status: number
+  readonly path?: string
 
-  constructor(status: number) {
+  constructor(status: number, path?: string) {
     super(`API error: ${status}`)
     this.name = 'ApiError'
     this.status = status
+    this.path = path
   }
 }
 
@@ -171,7 +173,8 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
     const token = getCsrfToken()
     if (token) csrfHeaders['X-CSRF-Token'] = token
   }
-  const res = await fetch(`${apiUrl()}${path}`, {
+  const fullUrl = `${apiUrl()}${path}`
+  const res = await fetch(fullUrl, {
     ...options,
     // Send the HttpOnly session cookie with every request.
     credentials: 'include',
@@ -181,7 +184,7 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
       ...options?.headers,
     },
   })
-  if (!res.ok) throw new ApiError(res.status)
+  if (!res.ok) throw new ApiError(res.status, fullUrl)
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
@@ -361,6 +364,12 @@ export const api = {
     removeTag: (friendId: string, tagId: string) =>
       fetchApi<ApiResponse<null>>(`/api/friends/${friendId}/tags/${tagId}`, {
         method: 'DELETE',
+      }),
+    /** 管理名 (nickname) を保存。空文字で解除しLINE表示名に戻る。 */
+    setDisplayName: (friendId: string, nickname: string) =>
+      fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${friendId}/display-name`, {
+        method: 'PUT',
+        body: JSON.stringify({ nickname }),
       }),
     richMenu: (id: string) =>
       fetchApi<ApiResponse<{ id: string | null; name: string | null; isDefault: boolean }>>(
@@ -990,7 +999,7 @@ export const api = {
       ),
   },
   chats: {
-    list: (params?: { status?: string; operatorId?: string; accountId?: string; unansweredOnly?: boolean; limit?: number; beforeAt?: string; beforeId?: string }) => {
+    list: (params?: { status?: string; operatorId?: string; accountId?: string; unansweredOnly?: boolean; limit?: number; beforeAt?: string; beforeId?: string; search?: string }) => {
       const query: Record<string, string> = {}
       if (params?.status) query.status = params.status
       if (params?.operatorId) query.operatorId = params.operatorId
@@ -1000,14 +1009,20 @@ export const api = {
       // カーソルページング: (lastMessageAt, friendId) の複合カーソルより古い行を返す
       if (params?.beforeAt) query.beforeAt = params.beforeAt
       if (params?.beforeId) query.beforeId = params.beforeId
+      // 名前検索 (管理名 / LINE表示名いずれにも一致)
+      if (params?.search) query.search = params.search
       return fetchApi<ApiResponse<Chat[]>>(
         '/api/chats?' + new URLSearchParams(query),
       )
     },
-    get: (id: string) =>
-      fetchApi<ApiResponse<Chat & { messages?: { id: string; content: string; senderType: string; createdAt: string }[] }>>(
-        `/api/chats/${id}`,
-      ),
+    get: (id: string, params?: { search?: string }) => {
+      const query = new URLSearchParams()
+      if (params?.search) query.set('search', params.search)
+      const qs = query.toString()
+      return fetchApi<ApiResponse<Chat & { messages?: { id: string; content: string; senderType: string; createdAt: string }[] }>>(
+        `/api/chats/${id}${qs ? '?' + qs : ''}`,
+      )
+    },
     create: (data: { friendId: string; operatorId?: string | null }) =>
       fetchApi<ApiResponse<Chat>>('/api/chats', {
         method: 'POST',

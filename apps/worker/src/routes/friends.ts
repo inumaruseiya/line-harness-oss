@@ -12,6 +12,7 @@ import {
   enrollFriendInScenario,
   getMileageSummaryForFriend,
   getMileageHistoryForFriend,
+  updateFriendNickname,
   jstNow,
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
@@ -34,7 +35,13 @@ function serializeFriend(row: DbFriend) {
   return {
     id: row.id,
     lineUserId: row.line_user_id,
-    displayName: row.display_name,
+    // Operator-assigned management name wins. LINE-side edits never reach the
+    // server, so this is what "友だちの名前を自分が変えた…" should surface as.
+    displayName: row.nickname ?? row.display_name,
+    nickname: row.nickname ?? null,
+    // Raw LINE profile name — kept for the management-name editor so the
+    // operator can see what they are overriding.
+    lineName: row.display_name,
     pictureUrl: row.picture_url,
     statusMessage: row.status_message,
     isFollowing: Boolean(row.is_following),
@@ -127,7 +134,9 @@ friends.get('/api/friends', async (c) => {
       binds.push(lineAccountId);
     }
     if (search) {
-      conditions.push('f.display_name LIKE ?');
+      // Search matches the operator-visible name — nickname first, LINE profile
+      // name as fallback — so a renamed friend stays findable by either name.
+      conditions.push('COALESCE(f.nickname, f.display_name) LIKE ?');
       binds.push(`%${search}%`);
     }
     // Unhandled filter: chats.status === 'unread'.
@@ -218,9 +227,9 @@ friends.get('/api/friends', async (c) => {
       listStmt = db.prepare(
         `SELECT ${baseSelect},
                 CASE
-                  WHEN f.display_name LIKE ? THEN 0
-                  WHEN f.display_name LIKE ? THEN 1
-                  WHEN f.display_name LIKE ? OR f.display_name LIKE ? THEN 2
+                  WHEN COALESCE(f.nickname, f.display_name) LIKE ? THEN 0
+                  WHEN COALESCE(f.nickname, f.display_name) LIKE ? THEN 1
+                  WHEN COALESCE(f.nickname, f.display_name) LIKE ? OR COALESCE(f.nickname, f.display_name) LIKE ? THEN 2
                   ELSE 3
                 END AS match_score
          ${baseFrom} ${where}
@@ -548,25 +557,80 @@ friends.put('/api/friends/:id/metadata', async (c) => {
   }
 });
 
+// PUT /api/friends/:id/display-name - set the operator-assigned management name.
+//
+// LINE does not expose operator-side renames to the Messaging API, so this is
+// the mirror of "友だちの名前を公式LINE側で変えた" for L Harness. Stored in a
+// dedicated `nickname` column: follow-webhook profile upserts and the
+// refresh-profiles batch keep overwriting display_name with LINE data, so a
+// personal name inside metadata would be clobbered, while nickname survives.
+friends.put('/api/friends/:id/display-name', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const db = c.env.DB;
+
+    const friend = await getFriendById(db, friendId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    const body = await c.req.json<{ nickname?: unknown }>();
+    if (typeof body.nickname !== 'string' && body.nickname !== null) {
+      return c.json({ success: false, error: 'nickname must be a string or null' }, 400);
+    }
+    // Trim; empty string clears back to the LINE profile name (NULL in DB).
+    const trimmed = typeof body.nickname === 'string' ? body.nickname.trim() : null;
+    if (trimmed !== null && trimmed.length > 100) {
+      return c.json({ success: false, error: 'nickname too long (max 100 chars)' }, 422);
+    }
+
+    await updateFriendNickname(db, friendId, trimmed && trimmed.length > 0 ? trimmed : null);
+
+    const updated = await getFriendById(db, friendId);
+    const tags = await getFriendTags(db, friendId);
+
+    return c.json({
+      success: true,
+      data: {
+        ...serializeFriend(updated!),
+        tags: tags.map(serializeTag),
+      },
+    });
+  } catch (err) {
+    console.error('PUT /api/friends/:id/display-name error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 // GET /api/friends/:id/messages - get message history
+// ?search= でメッセージ本文検索。テキストメッセージのみ対象 (flex/image 等は JSON
+// を LIKE で引くと誤ヒットするため除外)。全履歴を走査して最新の一致から返す。
 friends.get('/api/friends/:id/messages', async (c) => {
   try {
     const friendId = c.req.param('id');
+    const search = c.req.query('search')?.trim() || undefined;
     // Fetch the latest 200 messages (DESC) then reverse to ASC for display.
     // Using ORDER BY ASC LIMIT 200 returns the OLDEST 200 rows, which silently
     // hides recent activity for chatty friends. Exclude delivery_type='test'
     // to stay consistent with /api/chats/:id, so the same friend shows the
     // same history across DirectMessagePanel and the chat panel.
-    const result = await c.env.DB
-      .prepare(
-        `SELECT id, direction, message_type as messageType, content, created_at as createdAt
+    // 検索時は最新200件ではなく履歴全体を走査する (一致は古い日付にも在り得る)。
+    // 一致が多すぎると response が膨れるので、一致側に LIMIT 500。
+    const stmt = search
+      ? `SELECT id, direction, message_type as messageType, content, created_at as createdAt
          FROM messages_log WHERE friend_id = ?
            AND (delivery_type IS NULL OR delivery_type != 'test')
-         ORDER BY created_at DESC LIMIT 200`,
-      )
-      .bind(friendId)
-      .all<{ id: string; direction: string; messageType: string; content: string; createdAt: string }>();
-    return c.json({ success: true, data: result.results.reverse() });
+           AND message_type = 'text' AND content LIKE ?
+         ORDER BY created_at DESC LIMIT 500`
+      : `SELECT id, direction, message_type as messageType, content, created_at as createdAt
+         FROM messages_log WHERE friend_id = ?
+           AND (delivery_type IS NULL OR delivery_type != 'test')
+         ORDER BY created_at DESC LIMIT 200`;
+    const result = await (search
+      ? c.env.DB.prepare(stmt).bind(friendId, `%${search}%`)
+      : c.env.DB.prepare(stmt).bind(friendId)
+    ).all<{ id: string; direction: string; messageType: string; content: string; createdAt: string }>();
+    return c.json({ success: true, data: result.results.reverse(), ...(search ? { search, searchTotal: result.results.length } : {}) });
   } catch (err) {
     console.error('GET /api/friends/:id/messages error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);

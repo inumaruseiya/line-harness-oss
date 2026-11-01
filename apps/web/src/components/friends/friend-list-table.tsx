@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { PlusIcon } from '@phosphor-icons/react'
+import { PlusIcon, UserIcon } from '@phosphor-icons/react'
 import { Banner } from '@cloudflare/kumo/components/banner'
 import { Button } from '@cloudflare/kumo/components/button'
 import { Empty } from '@cloudflare/kumo/components/empty'
+import { Input } from '@cloudflare/kumo/components/input'
 import { LayerCard } from '@cloudflare/kumo/components/layer-card'
 import { Select } from '@cloudflare/kumo/components/select'
 import type { Tag } from '@line-crm/shared'
@@ -30,8 +31,17 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
   const [selectedTagId, setSelectedTagId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  // 管理名 (nickname) 編集。LINE公式側の友だち名変更はAPIに露出しないため、
+  // L Harness側で上書き表示する名前をここから保存する。空送信で解除。
+  const [nicknameDraft, setNicknameDraft] = useState('')
+  const [nicknameSaving, setNicknameSaving] = useState(false)
 
   const toggleExpand = (id: string) => {
+    if (expandedId !== id) {
+      const target = friends.find((f) => f.id === id)
+      // Prefill with the current management name (empty = LINE name in use).
+      setNicknameDraft(target?.nickname ?? '')
+    }
     setExpandedId(expandedId === id ? null : id)
     setAddingTagForFriend(null)
     setSelectedTagId('')
@@ -64,6 +74,20 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
       setError('タグの削除に失敗しました')
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 管理名保存。空文字は解除扱い (LINE表示名に戻る) — API が trim して NULL に溃す。
+  const handleSaveNickname = async (friendId: string) => {
+    setNicknameSaving(true)
+    setError('')
+    try {
+      await api.friends.setDisplayName(friendId, nicknameDraft)
+      onRefresh()
+    } catch {
+      setError('管理名の保存に失敗しました')
+    } finally {
+      setNicknameSaving(false)
     }
   }
 
@@ -109,6 +133,36 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
                     <div>
                       <p className="mb-1 text-xs font-semibold text-kumo-subtle">LINE ユーザーID</p>
                       <p className="select-all break-all font-mono text-xs text-kumo-default">{friend.lineUserId}</p>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-semibold text-kumo-subtle">管理名</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          size="sm"
+                          type="text"
+                          value={nicknameDraft}
+                          onChange={(e) => setNicknameDraft(e.target.value)}
+                          placeholder="空欄のまま保存するとLINE表示名に戻る"
+                          aria-label="管理名"
+                          className="max-w-[280px] flex-1"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="primary"
+                          icon={UserIcon}
+                          onClick={() => handleSaveNickname(friend.id)}
+                          disabled={nicknameSaving}
+                          loading={nicknameSaving}
+                        >
+                          管理名を保存
+                        </Button>
+                      </div>
+                      <p className="mt-1 text-[10px] text-kumo-subtle">
+                        {friend.lineName ? (
+                          <>LINE表示名: {friend.lineName}{friend.nickname ? ' → この画面の名前を優先表示します' : ''}</>
+                        ) : null}
+                      </p>
                     </div>
                     <p className="mb-2 text-xs font-semibold text-kumo-subtle">タグ管理</p>
                     <div className="flex flex-wrap gap-1.5 mb-2">

@@ -15,8 +15,10 @@ export interface Friend {
   id: string;
   /** LINE ユーザーID */
   lineUserId: string;
-  /** 表示名 */
+  /** 表示名 (管理名 nickname があれば優先、なければLINE表示名) */
   displayName: string;
+  /** 運営側が付けた管理名。nullならLINE表示名を使用 */
+  nickname?: string | null;
   /** プロフィール画像URL */
   pictureUrl: string | null;
   /** ステータスメッセージ */
@@ -37,6 +39,8 @@ export interface Friend {
    * 以後不変. 一覧 API の chat-status hydration が有効なときのみ付与.
    */
   firstTrackedLinkName?: string | null;
+  /** LINE側の生表示名。管理名が設定されているときに上書き対象として表示する */
+  lineName?: string | null;
   /**
    * チャット状態. /chats 画面の status と整合.
    *   unread       未対応 (incoming あり、operator が読んでない)
@@ -742,6 +746,10 @@ export interface Chat {
   lastMessageAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** 閲覧者 (staff) 別の未読判定。最新受信が自分の last_read_at より新しい */
+  viewerUnread?: boolean;
+  /** 閲覧者が最後にチャットを開いた時刻。未オープンなら null */
+  viewerLastReadAt?: string | null;
 }
 
 // -----------------------------------------------------------------------------

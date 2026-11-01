@@ -197,6 +197,8 @@ chats.get('/api/chats', async (c) => {
     const status = c.req.query('status') ?? undefined;
     const operatorId = c.req.query('operatorId') ?? undefined;
     const lineAccountId = c.req.query('lineAccountId') ?? undefined;
+    // 名前検索 (管理名 / LINE表示名いずれにも一致)。
+    const search = c.req.query('search')?.trim() || undefined;
     const unansweredOnly =
       c.req.query('unansweredOnly') === 'true' || c.req.query('unansweredOnly') === '1';
 
@@ -262,9 +264,36 @@ chats.get('/api/chats', async (c) => {
       conditions.push('f.line_account_id = ?');
       conditionBindings.push(lineAccountId);
     }
+    if (search) {
+      // 名前検索: 管理名 / LINE表示名の**どちら**にも一致させる。管理名に改名済み
+      // の人を元のLINE名で探せる (逆も) よう、片方に LIMIT しない。
+      conditions.push('(COALESCE(f.nickname, f.display_name) LIKE ? OR f.display_name LIKE ?)');
+      conditionBindings.push(`%${search}%`, `%${search}%`);
+    }
     // status / operator filter は chats を参照するので、その時だけ page CTE 側でも
     // chats を lookup する (無条件時は 全friend × chats lookup を省く)。
     const pageNeedsChats = Boolean(status || operatorId);
+
+    // 既読未読は閲覧者ごと。authMiddleware が c.staff に解決済み staff を積む
+    // (環境変数 API_KEY の fallback id 'env-owner' も同一キーとして扱う)。
+    const viewerStaff = c.get('staff') ?? null;
+    const viewerStaffId = viewerStaff?.id ?? null;
+    // viewer_unread: 最新受信メッセージが自分の last_read_at より新しいこと。
+    // chat_read_states に行が無い (未オープン / chats 行なし) ときは '1970' 起点で
+    // 全受信が未読扱い。あらかじめ staff_id は rs の結合条件だけに使う ( placԷ の
+    // COALESCE は last_read_at 列ではなく JOIN 先の値を参照する)。
+    const viewerUnreadSql = viewerStaffId
+      ? `EXISTS (
+          SELECT 1 FROM messages_log m
+           WHERE m.friend_id = f.id
+             AND m.direction = 'incoming'
+             AND (m.delivery_type IS NULL OR m.delivery_type != 'test')
+             AND m.created_at > COALESCE(rs.last_read_at, '1970-01-01T00:00:00.000+09:00')
+         ) AS viewer_unread`
+      : '0 AS viewer_unread';
+    const viewerReadJoinSql = viewerStaffId
+      ? 'LEFT JOIN chat_read_states rs ON rs.chat_id = c.id AND rs.staff_id = ?'
+      : '';
 
     // preview は direction/source を問わず **実際の最新メッセージ** を表示する。
     // incoming を常に優先すると、プロキシ経由の manual/external 送信が messages_log に
@@ -323,7 +352,7 @@ chats.get('/api/chats', async (c) => {
       SELECT
         f.id AS id,
         f.id AS friend_id,
-        f.display_name,
+        COALESCE(f.nickname, f.display_name) AS display_name,
         f.picture_url,
         f.line_user_id,
         f.line_account_id,
@@ -335,24 +364,29 @@ chats.get('/api/chats', async (c) => {
         rm.direction AS last_message_direction,
         rm.message_type AS last_message_type,
         COALESCE(c.created_at, d.last_message_at) AS created_at,
-        COALESCE(c.updated_at, d.last_message_at) AS updated_at
+        COALESCE(c.updated_at, d.last_message_at) AS updated_at,
+        ${viewerUnreadSql},
+        rs.last_read_at AS viewer_last_read_at
       FROM page d
       INNER JOIN friends f ON f.id = d.friend_id
       LEFT JOIN chats c ON c.id = (
         SELECT id FROM chats WHERE friend_id = f.id ORDER BY created_at DESC LIMIT 1
       )
       LEFT JOIN recent_msg rm ON rm.friend_id = f.id
+      ${viewerReadJoinSql}
       ORDER BY d.last_message_at DESC, d.friend_id DESC
     `;
 
     // placeholder 順 = SQL 出現順: last_any(account) → deduped 内 chats(account) →
-    // page 条件 → cursor (beforeAt ×2 + beforeId) → LIMIT。
+    // page 条件 → cursor (beforeAt ×2 + beforeId) → LIMIT → viewer (rs.staff_id ×1)。
     // any_agg は page で friend が確定済みのため account filter 不要。
+    const viewerBinds: unknown[] = viewerStaffId ? [viewerStaffId] : [];
     const allBindings: unknown[] = [];
     if (lineAccountId) allBindings.push(lineAccountId, lineAccountId);
     allBindings.push(...conditionBindings);
     if (useCursor) allBindings.push(beforeAt, beforeAt, beforeId);
     allBindings.push(limit);
+    allBindings.push(...viewerBinds);
     const result = await c.env.DB.prepare(sql).bind(...allBindings).all();
 
     let data = result.results.map((ch: Record<string, unknown>) => ({
@@ -369,6 +403,10 @@ chats.get('/api/chats', async (c) => {
       lastMessageType: ch.last_message_type || null,
       createdAt: ch.created_at,
       updatedAt: ch.updated_at,
+      // スタッフごとの既読未読。viewerUnread = 最新受信が自分の last_read_at より新し
+      // い。chats.status とは独立 (status は運用者共有の管理ステータス)。
+      viewerUnread: ch.viewer_unread === 1,
+      viewerLastReadAt: (ch.viewer_last_read_at as string | null) ?? null,
     }));
 
     if (unansweredMap) {
@@ -432,23 +470,47 @@ chats.get('/api/chats/:id', async (c) => {
     const lastMessageAt = chatRow?.last_message_at ?? null;
     const createdAt = chatRow?.created_at ?? null;
 
+    // チャットを開いた = 閲覧済みとして、スタッフごとの既読時刻を記録する。
+    // これで未読バッジが「私がまだ読んでいない incoming」だけになる。synthetic
+    // チャット (chats 行がまだ無い friend) では記録先が無いので skip。
+    const viewerStaff = c.get('staff') ?? null;
+    if (chatRow && viewerStaff) {
+      const readNow = jstNow();
+      await c.env.DB
+        .prepare(
+          `INSERT INTO chat_read_states (chat_id, staff_id, last_read_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT (chat_id, staff_id) DO UPDATE SET last_read_at = excluded.last_read_at`,
+        )
+        .bind(chatRow.id, viewerStaff.id, readNow)
+        .run();
+    }
+
     const friend = await c.env.DB
-      .prepare(`SELECT display_name, picture_url, line_user_id FROM friends WHERE id = ?`)
+      .prepare(`SELECT COALESCE(nickname, display_name) AS display_name, nickname, picture_url, line_user_id FROM friends WHERE id = ?`)
       .bind(resolvedFriendId)
-      .first<{ display_name: string | null; picture_url: string | null; line_user_id: string }>();
+      .first<{ display_name: string | null; nickname: string | null; picture_url: string | null; line_user_id: string }>();
 
     // 新しい1000件を取って昇順に戻す。LIMIT 200 ASC だと古い200件だけで broadcast/scenario 等の
     // 新しい push が欠落していた（Shu で 481件中 281件欠落のバグあり）。一覧側と同様に test 配信は除外。
     // 現状の最重量ユーザー(481件)の2倍バッファ。これ以上の履歴はページング未実装（Phase 2 TODO）。
-    const messages = await c.env.DB
-      .prepare(
-        `SELECT id, friend_id, direction, message_type, content, created_at
+    // ?search= のときはメッセージ本文検索: テキストのみ対象 (`?` はLIKE自体のためを
+    // エスケープしない — オペレータが打つのは普通の単語)。全履歴走査、一致 LIMIT 500。
+    const searchQuery = c.req.query('search')?.trim() || undefined;
+    const messagesSql = searchQuery
+      ? `SELECT id, friend_id, direction, message_type, content, created_at
          FROM messages_log
          WHERE friend_id = ? AND (delivery_type IS NULL OR delivery_type != 'test')
-         ORDER BY created_at DESC LIMIT 1000`,
-      )
-      .bind(resolvedFriendId)
-      .all();
+           AND message_type = 'text' AND content LIKE ?
+         ORDER BY created_at DESC LIMIT 500`
+      : `SELECT id, friend_id, direction, message_type, content, created_at
+         FROM messages_log
+         WHERE friend_id = ? AND (delivery_type IS NULL OR delivery_type != 'test')
+         ORDER BY created_at DESC LIMIT 1000`;
+    const messages = await (searchQuery
+      ? c.env.DB.prepare(messagesSql).bind(resolvedFriendId, `%${searchQuery}%`)
+      : c.env.DB.prepare(messagesSql).bind(resolvedFriendId)
+    ).all();
     messages.results = (messages.results as Record<string, unknown>[]).reverse();
 
     return c.json({
@@ -457,12 +519,14 @@ chats.get('/api/chats/:id', async (c) => {
         id: responseId,
         friendId: resolvedFriendId,
         friendName: friend?.display_name || '名前なし',
+        friendNickname: friend?.nickname ?? null,
         friendPictureUrl: friend?.picture_url || null,
         operatorId,
         status,
         notes,
         lastMessageAt,
         createdAt,
+        ...(searchQuery ? { search: searchQuery, searchTotal: messages.results.length } : {}),
         messages: (messages.results as Record<string, unknown>[]).map((m) => ({
           id: m.id,
           direction: m.direction,

@@ -32,6 +32,9 @@ interface Chat {
   lastMessageType: string | null
   createdAt: string
   updatedAt: string
+  /** スタッフごとの未読 (自分の last_read_at より新しい受信がある) */
+  viewerUnread?: boolean
+  viewerLastReadAt?: string | null
 }
 
 interface ChatMessage {
@@ -58,6 +61,9 @@ interface ChatDetail extends Chat {
   friendName: string
   friendPictureUrl: string | null
   messages?: ChatMessage[]
+  /** メッセージ内検索 (?search=) の時だけ付与。ヒット総数は上限500件の下限値 */
+  search?: string
+  searchTotal?: number
 }
 
 type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
@@ -108,6 +114,26 @@ function formatDatetime(iso: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+// メッセージ内検索のヒット強調。大文字小文字を無視した部分一致 (SQL LIKE と同じ
+// 挙動)。query を lowercase で全位置 indexOf してトークン列を組み立てる。
+function HighlightedText({ content, query }: { content: string; query: string }) {
+  if (!query) return <span>{content}</span>
+  const lowerContent = content.toLowerCase()
+  const lowerQuery = query.toLowerCase()
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  let idx = lowerContent.indexOf(lowerQuery, cursor)
+  let key = 0
+  while (idx !== -1) {
+    if (idx > cursor) nodes.push(<span key={key++}>{content.slice(cursor, idx)}</span>)
+    nodes.push(<mark key={key++} className="bg-yellow-200 px-0.5 rounded">{content.slice(idx, idx + query.length)}</mark>)
+    cursor = idx + query.length
+    idx = lowerContent.indexOf(lowerQuery, cursor)
+  }
+  nodes.push(<span key={key++}>{content.slice(cursor)}</span>)
+  return <span>{nodes}</span>
 }
 
 function sameYmd(aIso: string, bIso: string): boolean {
@@ -324,6 +350,11 @@ export default function ChatsPage() {
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const statusFilterRef = useRef<StatusFilter>('all')
+  // チャット一覧の名前検索。サーバー側で管理名 / LINE表示名のどちらにも一致させる。
+  const [searchInput, setSearchInput] = useState('')
+  const [searchSubmitted, setSearchSubmitted] = useState('')
+  const searchSubmittedRef = useRef('')
+  useEffect(() => { searchSubmittedRef.current = searchSubmitted }, [searchSubmitted])
   const unansweredOnlyRef = useRef(false)
   const [unansweredOnly, setUnansweredOnly] = useState(() => {
     if (typeof window === 'undefined') return false
@@ -361,6 +392,10 @@ export default function ChatsPage() {
   const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
   const isComposingRef = useRef(false)
+  // メッセージ内検索 (?search=)。ヒットしたテキストはバブル内でハイライト。
+  const [showMessageSearch, setShowMessageSearch] = useState(false)
+  const [messageSearchDraft, setMessageSearchDraft] = useState('')
+  const [messageSearch, setMessageSearch] = useState('')
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // OAM(公式LINEマネージャー)風レイアウト: 添付・設定・メモは折りたたみ、
@@ -402,18 +437,19 @@ export default function ChatsPage() {
   const buildListParams = useCallback((cursor: { at: string; id: string } | null) => {
     const params: {
       status?: string; accountId?: string; unansweredOnly?: boolean;
-      limit?: number; beforeAt?: string; beforeId?: string;
+      limit?: number; beforeAt?: string; beforeId?: string; search?: string;
     } = {}
     if (statusFilter !== 'all' && !unansweredOnly) params.status = statusFilter
     if (selectedAccountId) params.accountId = selectedAccountId
     if (unansweredOnly) params.unansweredOnly = true
     else params.limit = CHAT_PAGE_SIZE
+    if (searchSubmitted) params.search = searchSubmitted
     if (cursor) {
       params.beforeAt = cursor.at
       params.beforeId = cursor.id
     }
     return params
-  }, [statusFilter, selectedAccountId, unansweredOnly])
+  }, [statusFilter, selectedAccountId, unansweredOnly, searchSubmitted])
 
   const loadChats = useCallback(async () => {
     setLoading(true)
@@ -492,14 +528,19 @@ export default function ChatsPage() {
     try { localStorage.setItem('chat.sendMode', sendMode) } catch { /* ignore */ }
   }, [sendMode])
 
-  const loadChatDetail = useCallback(async (chatId: string) => {
+  const loadChatDetail = useCallback(async (chatId: string, search?: string) => {
     setDetailLoading(true)
     setError('')
     try {
-      const res = await api.chats.get(chatId)
-      if (res.success) {
+      const res = await api.chats.get(chatId, { search })
+  if (res.success) {
         setChatDetail(res.data as unknown as ChatDetail)
         setNotes((res.data as unknown as ChatDetail).notes || '')
+        // GET /api/chats/:id は server 側で既読を記録する。一覧側のスタッフ別
+        // 未読バッジも楽観的に既読へ変える (extra API 呼び出しなし)。
+        setChats((prev) => prev.map((chat) => chat.id === chatId
+          ? { ...chat, viewerUnread: false, viewerLastReadAt: new Date().toISOString() }
+          : chat))
       } else {
         // API は 200 で success:false を返す可能性 (例: 404 lookup)。詳細を画面に出す。
         const errMsg = (res as { error?: string }).error ?? '不明なエラー'
@@ -534,6 +575,9 @@ export default function ChatsPage() {
       loadChatDetail(selectedChatId)
     } else {
       setChatDetail(null)
+      setMessageSearch('')
+      setMessageSearchDraft('')
+      setShowMessageSearch(false)
     }
   }, [selectedChatId, loadChatDetail])
 
@@ -626,6 +670,9 @@ export default function ChatsPage() {
     setShowImagePicker(false)
     setShowComposerSettings(false)
     setShowMobileMemo(false)
+    // チャット切替で検索もリセット
+    setMessageSearch('')
+    setMessageSearchDraft('')
   }
 
   // ⚙ 設定ポップオーバーは浮いた要素なので、外側クリックと Escape で閉じる。
@@ -775,6 +822,39 @@ export default function ChatsPage() {
         <div className={`w-full lg:w-80 xl:w-96 lg:flex-shrink-0 bg-white border-r border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
           {/* タブ (全て / 未読 / 対応中 / 解決済) は意図的に削除。直近メッセージが見やすい LINE 風一覧を優先。 */}
 
+          {/* Search row — 一覧の名前検索。管理名 / LINE表示名どちらにも一致。 */}
+          <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2">
+            <Input
+              aria-label="チャット一覧の名前検索"
+              type="text"
+              value={searchInput}
+              onChange={(e) => {
+                const v = e.target.value
+                setSearchInput(v)
+                // 空に戻したら検索解除 (友だちリストと同じ挙動)。文字入力では送らない —
+                // 検索は Enter / 🔎 で確定してからサーバーへ飛ばす。
+                if (v.trim() === '' && searchSubmittedRef.current !== '') {
+                  setSearchSubmitted('')
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || isComposingRef.current) return
+                if (e.key === 'Enter') setSearchSubmitted(searchInput.trim())
+              }}
+              placeholder="名前を検索"
+              className="flex-1 h-8 text-sm"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant={searchSubmitted ? 'primary' : 'secondary'}
+              onClick={() => setSearchSubmitted(searchInput.trim())}
+              title="名前でチャットを検索"
+            >
+              🔎
+            </Button>
+          </div>
+
           {/* Filter row */}
           <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center gap-2">
             {statusFilters.map((f) => (
@@ -816,12 +896,12 @@ export default function ChatsPage() {
               <>
                 {chats.map((chat) => {
                   const isSelected = selectedChatId === chat.id
-                  // 「真の自発（要対応）」= chat.status='unread'。webhook 側で auto_reply に
-                  // マッチしなかった incoming のみ unread に設定される。auto_reply trigger
-                  // (キーワード "コスト比較" 等) は matched 扱いで unread 化しない。
-                  // bold / 🟥 の表示はこの status を使う。direction だけだと button 押下も
-                  // 強調してしまって S/N 比が悪化する。
-                  const needsAttention = chat.status === 'unread'
+                  // 「真の自発（要対応）」= 閲覧者自身がまだ読んでいない incoming。
+                  // chats.status は運用共有の管理ステータス (未対応/対応中/解決済)
+                  // なので、立ち上げ時に未読がそのまま残るのは本来で未読表示、
+                  // 開封したら消えることを自分が意図している。viewerUnread が
+                  // 無い応答 (古いクライアント/画面外) は従来の status 依存に落とす。
+                  const needsAttention = chat.viewerUnread ?? chat.status === 'unread'
                   // 最新メッセージの本文 preview。flex/image は文字列で見せても意味が薄いので type 表記に置換。
                   const previewRaw = chat.lastMessageContent ?? ''
                   const preview = (() => {
@@ -855,8 +935,14 @@ export default function ChatsPage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                              {chat.status === 'unread' && (
-                                <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" aria-label="未読" />
+                              {/* 赤い既読未読ドットは閲覧者ごと (viewerUnread)。開いた
+                                  スタッフには消え、他スタッフには残る (LINE式)。 */}
+                              {(chat.viewerUnread ?? chat.status === 'unread') && (
+                                <span
+                                  className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"
+                                  aria-label="未読"
+                                  title="あなたがまだ読んでいない受信メッセージがあります"
+                                />
                               )}
                               <p className="text-sm font-medium text-gray-900 truncate">{chat.friendName}</p>
                             </div>
@@ -942,6 +1028,16 @@ export default function ChatsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* メッセージ内検索の開閉。確定 (Enter) 時に server (?search=) へ飛ぶ */}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={showMessageSearch || messageSearch ? 'primary' : 'secondary'}
+                    onClick={() => setShowMessageSearch((v) => !v)}
+                    title="メッセージ本文を検索 (テキストメッセージが対象)"
+                  >
+                    🔍 検索
+                  </Button>
                   {/* メモはPC(xl+)では右サイドバーに常設。狭い画面のみトグルで表示する */}
                   <Button type="button" size="sm" variant={showMobileMemo ? 'primary' : 'secondary'}
                     onClick={() => setShowMobileMemo((v) => !v)}
@@ -990,6 +1086,50 @@ export default function ChatsPage() {
                   )}
                 </div>
               </div>
+
+              {/* メッセージ内検索バー — ヘッダーの直下、バブル領域の上。 */}
+              {showMessageSearch && (
+                <div className="flex-shrink-0 px-4 py-2 border-b border-gray-200 bg-gray-50 flex items-center gap-2">
+                  <Input
+                    aria-label="メッセージ検索"
+                    type="text"
+                    value={messageSearchDraft}
+                    onChange={(e) => setMessageSearchDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.nativeEvent.isComposing || isComposingRef.current) return
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        if (selectedChatId && messageSearchDraft.trim() !== messageSearch) {
+                          void loadChatDetail(selectedChatId, messageSearchDraft.trim() || undefined)
+                        }
+                        setMessageSearch(messageSearchDraft.trim())
+                        if (messageSearchDraft.trim() === '') setShowMessageSearch(false)
+                      }
+                    }}
+                    placeholder="メッセージ本文を検索 (テキストのみ)"
+                    className="flex-1 h-8 text-sm"
+                    autoFocus
+                  />
+                  {messageSearch && (
+                    <span className="text-[11px] text-blue-600 whitespace-nowrap">
+                      {chatDetail?.searchTotal ?? 0}件ヒット
+                      {(chatDetail?.searchTotal ?? 0) >= 500 ? '(上限500)' : ''}
+                    </span>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setMessageSearchDraft('')
+                      if (messageSearch && selectedChatId) void loadChatDetail(selectedChatId)
+                      setMessageSearch('')
+                    }}
+                  >
+                    クリア
+                  </Button>
+                </div>
+              )}
 
               {/* Messages — LINE-style chat bubbles */}
               <div ref={messagesScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
@@ -1063,7 +1203,10 @@ export default function ChatsPage() {
                     } else if (msg.messageType === 'sticker') {
                       bubbleContent = <StickerMessageImage content={msg.content} />
                     } else {
-                      bubbleContent = <span>{msg.content}</span>
+                      // 検索中のテキストバブルはヒット部分をハイライト
+                      bubbleContent = messageSearch && msg.messageType === 'text'
+                        ? <HighlightedText content={msg.content} query={messageSearch} />
+                        : <span>{msg.content}</span>
                     }
 
                     return (
@@ -1317,6 +1460,9 @@ export default function ChatsPage() {
                     savingNotes,
                   }
                 : {})}
+              onFriendUpdated={
+                selectedChatId ? () => { void loadChatDetail(selectedChatId) } : undefined
+              }
             />
           </div>
         )}

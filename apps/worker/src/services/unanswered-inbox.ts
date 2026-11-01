@@ -99,7 +99,7 @@ const CANDIDATES_SQL = `
   )
   SELECT
     f.id            AS friend_id,
-    f.display_name,
+    COALESCE(f.nickname, f.display_name) AS display_name,
     f.picture_url,
     f.line_account_id,
     COALESCE(la.name, '(未分類)') AS account_name,

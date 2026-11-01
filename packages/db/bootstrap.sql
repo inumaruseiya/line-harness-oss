@@ -255,6 +255,16 @@ CREATE TABLE IF NOT EXISTS chats (
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 , line_account_id TEXT);
 
+-- Per-staff read state (migration 075). See 075_chat_read_states.sql.
+CREATE TABLE IF NOT EXISTS chat_read_states (
+  chat_id      TEXT NOT NULL REFERENCES chats (id) ON DELETE CASCADE,
+  staff_id     TEXT NOT NULL,
+  last_read_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  PRIMARY KEY (chat_id, staff_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_read_states_staff ON chat_read_states (staff_id);
+
 -- Web Push subscriptions (migration 076). See 076_push_subscriptions.sql.
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id              TEXT PRIMARY KEY,
@@ -495,6 +505,7 @@ CREATE TABLE IF NOT EXISTS friends (
   id               TEXT PRIMARY KEY,
   line_user_id     TEXT UNIQUE NOT NULL,
   display_name     TEXT,
+  nickname         TEXT,
   picture_url      TEXT,
   status_message   TEXT,
   is_following     INTEGER NOT NULL DEFAULT 1,

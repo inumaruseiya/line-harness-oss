@@ -66,7 +66,7 @@ conversations.get('/api/conversations', async (c) => {
       SELECT
         f.id AS friend_id,
         f.line_user_id,
-        f.display_name,
+        COALESCE(f.nickname, f.display_name) AS display_name,
         f.line_account_id,
         la.name AS line_account_name,
         li.at AS last_incoming_at,
@@ -187,7 +187,7 @@ conversations.get('/api/conversations/:friendId', async (c) => {
     const before = url.searchParams.get('before');
 
     const friend = await c.env.DB.prepare(
-      `SELECT f.id, f.line_user_id, f.display_name, f.is_following, f.line_account_id, la.name AS line_account_name
+      `SELECT f.id, f.line_user_id, COALESCE(f.nickname, f.display_name) AS display_name, f.is_following, f.line_account_id, la.name AS line_account_name
        FROM friends f LEFT JOIN line_accounts la ON la.id = f.line_account_id WHERE f.id = ?`,
     )
       .bind(friendId)

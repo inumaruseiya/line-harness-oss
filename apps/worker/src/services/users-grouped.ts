@@ -26,7 +26,7 @@ const IDENT_SQL = `
     friends.line_account_id,
     line_accounts.name   AS account_name,
     friends.line_user_id,
-    friends.display_name,
+    COALESCE(friends.nickname, friends.display_name) AS display_name,
     friends.picture_url,
     friends.is_following,
     friends.metadata,
