@@ -257,6 +257,7 @@ async function notifyForBooking(
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
+              f.id AS friend_id,
               f.line_user_id
          FROM bookings b
          INNER JOIN menus m ON m.id = b.menu_id
@@ -271,6 +272,7 @@ async function notifyForBooking(
       menu_name: string;
       staff_name: string;
       channel_access_token: string;
+      friend_id: string;
       line_user_id: string;
     }>();
   if (!row) return;
@@ -284,6 +286,8 @@ async function notifyForBooking(
       startsAtJst: startsAtJst(row.starts_at),
       hoursBefore: 0,
     },
+    // 予約系自動通知もチャットスレッドに「自動返信」として残す (booking-notifier.ts 参照)。
+    log: { db, friendId: row.friend_id },
   });
 }
 

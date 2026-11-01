@@ -10,6 +10,7 @@ interface DueRow {
   menu_name: string;
   staff_name: string;
   channel_access_token: string;
+  friend_id: string;
   line_user_id: string;
 }
 
@@ -58,6 +59,7 @@ describe('processDueReminders', () => {
         menu_name: 'カット',
         staff_name: '山田',
         channel_access_token: 'tok',
+        friend_id: 'F1',
         line_user_id: 'U_xyz',
       },
     ];
@@ -103,6 +105,7 @@ describe('processDueReminders', () => {
         menu_name: 'カット',
         staff_name: '山田',
         channel_access_token: 'tok',
+        friend_id: 'F1',
         line_user_id: 'U',
       },
     ];
@@ -131,6 +134,7 @@ describe('processDueReminders', () => {
         menu_name: 'カット',
         staff_name: '山田',
         channel_access_token: 'tok',
+        friend_id: 'F1',
         line_user_id: 'U',
       },
     ];

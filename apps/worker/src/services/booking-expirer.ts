@@ -10,6 +10,7 @@ interface StaleRow {
   menu_name: string;
   staff_name: string;
   channel_access_token: string;
+  friend_id: string;
   line_user_id: string;
 }
 
@@ -36,6 +37,7 @@ export async function runExpirer(
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
+              f.id AS friend_id,
               f.line_user_id
          FROM bookings b
          INNER JOIN menus m ON m.id = b.menu_id
@@ -76,6 +78,7 @@ export async function runExpirer(
           startsAtJst: startsAtJst(row.starts_at),
           hoursBefore: 0,
         },
+        log: { db, friendId: row.friend_id },
       });
     } catch {
       // 通知失敗は許容、expirer 自体は完了

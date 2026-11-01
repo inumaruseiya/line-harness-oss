@@ -41,12 +41,35 @@ export interface SendNotificationParams {
   toLineUserId: string;
   kind: NotificationKind;
   ctx: NotificationContext;
+  /**
+   * 送信ログ用。指定すると push 成功後に messages_log へ outgoing を書く。
+   * source='auto_reply' (delivery_type NULL) — 管理画面の個別チャットはこの
+   * source に「自動返信」ラベルを付けて表示するため、予約系自動通知も会話
+   * スレッド内で判別可能になる。DB 書き込み失敗はpush 本体を失敗させない。
+   */
+  log?: { db: D1Database; friendId: string };
 }
 
 export async function sendBookingNotification(params: SendNotificationParams): Promise<void> {
   const text = renderNotificationText(params.kind, params.ctx);
   const client = new LineClient(params.channelAccessToken);
   await client.pushMessage(params.toLineUserId, [{ type: 'text', text }]);
+
+  // push 送信成功後の best-effort 証跡書き込み。
+  if (params.log) {
+    try {
+      await params.log.db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, source, created_at)
+           VALUES (?, ?, 'outgoing', 'text', ?, 'auto_reply',
+                   strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))`,
+        )
+        .bind(crypto.randomUUID(), params.log.friendId, text)
+        .run();
+    } catch (err) {
+      console.error(`booking notification messages_log write failed (${params.kind}):`, err);
+    }
+  }
 }
 
 export type BookingNotificationSender = (params: SendNotificationParams) => Promise<void>;

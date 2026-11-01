@@ -185,7 +185,8 @@ function BookingsInner() {
                     return (
                     <Table.Row key={b.id}>
                       <Table.Cell className="text-kumo-default">
-                        {b.friend_display_name ?? b.friend_id.slice(0, 8)}
+                        {/* 管理名 (nickname) があれば優先し、なければLINE表示名 */}
+                        {b.friend_nickname ?? b.friend_display_name ?? b.friend_id.slice(0, 8)}
                       </Table.Cell>
                       <Table.Cell className="text-kumo-subtle text-xs">{accountLabel}</Table.Cell>
                       <Table.Cell>{formatJp(b.slot_starts_at)}</Table.Cell>

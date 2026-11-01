@@ -14,6 +14,7 @@ interface DueRow {
   menu_name: string;
   staff_name: string;
   channel_access_token: string;
+  friend_id: string;
   line_user_id: string;
 }
 
@@ -43,6 +44,7 @@ export async function processDueReminders(
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
+              f.id AS friend_id,
               f.line_user_id
          FROM booking_reminders r
          INNER JOIN bookings b ON b.id = r.booking_id
@@ -74,6 +76,8 @@ export async function processDueReminders(
           startsAtJst: startsAtJst(row.starts_at),
           hoursBefore: params.reminderHoursBefore,
         },
+        // リマインダ (前日/当日) も「自動返信」ラベル付きでチャットスレッドに残す。
+        log: { db, friendId: row.friend_id },
       });
       await db
         .prepare(

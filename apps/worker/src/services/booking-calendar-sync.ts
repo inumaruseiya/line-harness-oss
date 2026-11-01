@@ -90,8 +90,9 @@ export async function syncConfirmedBookingToGoogle(
   const row = await db
     .prepare(
       `SELECT b.id, b.starts_at, b.ends_at, b.customer_note, b.external_event_id,
-              f.display_name AS friend_name, m.name AS menu_name,
-              s.display_name AS staff_name,
+              f.display_name AS friend_name, f.nickname AS friend_nickname,
+              m.name AS menu_name,
+              COALESCE(NULLIF(TRIM(s.display_name), ''), s.name, '') AS staff_name,
               gc.id AS connection_id, gc.calendar_id, gc.auth_type,
               gc.access_token, gc.refresh_token
          FROM bookings b
@@ -112,6 +113,7 @@ export async function syncConfirmedBookingToGoogle(
       customer_note: string | null;
       external_event_id: string | null;
       friend_name: string | null;
+      friend_nickname: string | null;
       menu_name: string;
       staff_name: string;
       connection_id: string | null;
@@ -132,14 +134,20 @@ export async function syncConfirmedBookingToGoogle(
     refresh_token: row.refresh_token,
   };
   const client = await clientForConnection(connection, credentials);
+  // タイトルは「管理名｜担当者名」: TimeTree が Google カレンダーの予定を
+  // ホームカレンダー表示したとき、タイトルだけで本人/担当が判別できる形にする。
+  // 管理名 (f.nickname, migration 074) があれば LINE 表示名より優先し、担当は
+  // display_name 未設定の staff 行で「担当: 」が空にならないよう name に落とす。
+  const bookerName = row.friend_nickname?.trim() || row.friend_name || 'お客様';
+  const staffName = row.staff_name?.trim() || '担当未定';
   const created = await client.createEvent({
     // Google event IDはbase32hexのみ。UUIDのハイフンを除けば0-9/a-fだけとなり有効。
     externalId: row.id.replace(/-/g, '').toLowerCase(),
-    summary: `${row.friend_name ?? 'お客様'}｜${row.menu_name}`,
+    summary: `${bookerName}｜${staffName}`,
     start: row.starts_at,
     end: row.ends_at,
     description: [
-      `L Harness予約（担当: ${row.staff_name}）`,
+      `L Harness予約（メニュー: ${row.menu_name}／担当: ${staffName}）`,
       `予約ID: ${row.id}`,
       row.customer_note ? `メモ: ${row.customer_note}` : '',
     ].filter(Boolean).join('\n'),

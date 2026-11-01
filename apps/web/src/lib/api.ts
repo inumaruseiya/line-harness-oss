@@ -2024,6 +2024,7 @@ export interface EventBookingItem {
   slot_starts_at: string;
   slot_ends_at: string;
   friend_display_name: string | null;
+  friend_nickname: string | null;
   friend_line_user_id: string | null;
 }
 

@@ -501,7 +501,7 @@ function makeEventDb(state: {
               );
             return { results: items as unknown as T[] };
           }
-          // admin bookings list: SELECT b.*, s.starts_at, ..., friends.display_name FROM event_bookings b JOIN event_slots s ...
+          // admin bookings list: SELECT b.*, s.starts_at, ..., friends.display_name/nickname FROM event_bookings b JOIN event_slots s ...
           if (sql.includes('FROM event_bookings b') && sql.includes('friend_display_name')) {
             const event_id = bound[0] as string;
             const filterStatus = sql.includes('b.status = ?') ? (bound[1] as string) : null;
@@ -520,6 +520,7 @@ function makeEventDb(state: {
                   slot_starts_at: s?.starts_at ?? null,
                   slot_ends_at: s?.ends_at ?? null,
                   friend_display_name: (f as { display_name?: string } | undefined)?.display_name ?? null,
+                  friend_nickname: (f as { nickname?: string | null } | undefined)?.nickname ?? null,
                   friend_line_user_id: f?.line_user_id ?? null,
                 };
               });
@@ -1911,16 +1912,20 @@ describe('admin bookings management', () => {
         { id: 'b2', event_id: 'e1', slot_id: 's1', friend_id: 'f-la2', line_account_id: 'la2', status: 'confirmed' } as BookingRow & Record<string, unknown>,
       ],
       friends: [
-        { id: 'f-la1', line_account_id: 'la1', line_user_id: 'U1' },
+        { id: 'f-la1', line_account_id: 'la1', line_user_id: 'U1', nickname: '管理名1' },
         { id: 'f-la2', line_account_id: 'la2', line_user_id: 'U2' },
       ],
     };
     const app = setupApp(state);
     const res = await app.request('/api/events/admin/events/e1/bookings?account_id=la1');
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { items: Array<{ id: string; line_account_id: string }> };
+    const body = (await res.json()) as { items: Array<{ id: string; line_account_id: string; friend_nickname: string | null }> };
     expect(body.items).toHaveLength(2);
     expect(body.items.map((x) => x.line_account_id).sort()).toEqual(['la1', 'la2']);
+    // 管理名 (nickname) は raw f.nickname のまま返す。表示側で display_name への
+    // フォールバックを行う (管理名未設定の f-la2 は null)。
+    expect(body.items.find((x) => x.id === 'b1')?.friend_nickname).toBe('管理名1');
+    expect(body.items.find((x) => x.id === 'b2')?.friend_nickname).toBeNull();
   });
 
   test('GET /:id/bookings filters by status and slot', async () => {

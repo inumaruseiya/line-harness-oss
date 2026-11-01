@@ -498,12 +498,14 @@ chats.get('/api/chats/:id', async (c) => {
     // エスケープしない — オペレータが打つのは普通の単語)。全履歴走査、一致 LIMIT 500。
     const searchQuery = c.req.query('search')?.trim() || undefined;
     const messagesSql = searchQuery
-      ? `SELECT id, friend_id, direction, message_type, content, created_at
+      ? `SELECT id, friend_id, direction, message_type, content,
+                delivery_type, source, broadcast_id, scenario_step_id, created_at
          FROM messages_log
          WHERE friend_id = ? AND (delivery_type IS NULL OR delivery_type != 'test')
            AND message_type = 'text' AND content LIKE ?
          ORDER BY created_at DESC LIMIT 500`
-      : `SELECT id, friend_id, direction, message_type, content, created_at
+      : `SELECT id, friend_id, direction, message_type, content,
+                delivery_type, source, broadcast_id, scenario_step_id, created_at
          FROM messages_log
          WHERE friend_id = ? AND (delivery_type IS NULL OR delivery_type != 'test')
          ORDER BY created_at DESC LIMIT 1000`;
@@ -533,6 +535,16 @@ chats.get('/api/chats/:id', async (c) => {
           messageType: m.message_type,
           content: m.content,
           createdAt: m.created_at,
+          // 発信元ラベル用。conversations.ts の推論と同一ルール: source が NULL の
+          // 旧行 (migration 028 適用前の writer 含む) は delivery_type / 外部キー
+          // から復元し、自動配信がオペレーター返信と誤認されるのを防ぐ。
+          source: m.source ?? (
+            m.direction === 'incoming' ? 'user'
+              : m.scenario_step_id ? 'scenario'
+              : (m.broadcast_id || m.delivery_type === 'test') ? 'broadcast'
+              : m.delivery_type === 'reply' ? 'auto_reply'
+              : 'manual'
+          ),
         })),
       },
     });

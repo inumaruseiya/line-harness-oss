@@ -43,6 +43,8 @@ interface ChatMessage {
   messageType: string
   content: string
   createdAt: string
+  /** 発信元 (worker /api/chats/:id が conversations.ts と同一ルールで付与)。自動返信ラベル表示に使う */
+  source?: string | null
 }
 
 // リッチメニューのタブ切替 (richmenuswitch) は、webhook が postback data
@@ -1234,6 +1236,12 @@ export default function ChatsPage() {
                               親の幅が確定していないとパーセントを解決できず
                               min-content（1 文字幅）まで潰れて縦一列に改行される */}
                           <div className={`flex flex-col w-full min-w-0 ${isOutgoing ? 'items-end' : 'items-start'}`}>
+                            {/* 自動返信ラベル: オペレーター返信 (manual) と区別するため
+                                発信元が auto_reply のバブルにだけ出す。それ以外の自動
+                                配信 (scenario/broadcast) は従来どおりラベルなし。 */}
+                            {isOutgoing && msg.source === 'auto_reply' && (
+                              <span className="text-[11px] text-white/70 px-1 pb-0.5">自動返信</span>
+                            )}
                             {/* メッセージバブル。flex / sticker はバブル chrome なしで直接置く */}
                             {isBareContent ? (
                               <div className="max-w-[92%] lg:max-w-[80%] min-w-0">
