@@ -6,7 +6,7 @@ import { Banner } from '@cloudflare/kumo/components/banner'
 import { usePushNotifications } from '@/hooks/use-push-notifications'
 
 export default function PushNotificationSettings() {
-  const { permission, subscribed, subscribe, unsubscribe } = usePushNotifications()
+  const { permission, subscribed, error, subscribe, unsubscribe } = usePushNotifications()
 
   if (permission === 'unsupported') return null
 
@@ -36,6 +36,15 @@ export default function PushNotificationSettings() {
           variant="alert"
           title="ブラウザの通知が拒否されています"
           description="ブラウザのサイト設定から通知を許可し、ページを再読み込みしてください。"
+        />
+      ) : null}
+      {error ? (
+        <Banner
+          className="mt-4"
+          size="sm"
+          variant="error"
+          title="通知の設定に失敗しました"
+          description={error}
         />
       ) : null}
     </LayerCard>

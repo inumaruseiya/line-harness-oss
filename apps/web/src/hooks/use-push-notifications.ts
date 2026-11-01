@@ -1,6 +1,12 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
+
+function describeError(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return `${fallback} (${err.status} ${err.path ?? ''})`
+  if (err instanceof Error) return `${fallback}: ${err.message}`
+  return fallback
+}
 
 // 標準的な VAPID 公開鍵 → applicationServerKey 変換
 function urlBase64ToUint8Array(base64Url: string): Uint8Array {
@@ -17,11 +23,13 @@ export type PushPermissionState = NotificationPermission | 'unsupported'
 export function usePushNotifications(): {
   permission: PushPermissionState
   subscribed: boolean
+  error: string | null
   subscribe: () => Promise<void>
   unsubscribe: () => Promise<void>
 } {
   const [permission, setPermission] = useState<PushPermissionState>('default')
   const [subscribed, setSubscribed] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
@@ -37,38 +45,77 @@ export function usePushNotifications(): {
   }, [])
 
   async function subscribe(): Promise<void> {
+    setError(null)
+
     const perm = await Notification.requestPermission()
     setPermission(perm)
     if (perm !== 'granted') return
 
-    const reg = await navigator.serviceWorker.ready
-    const keyRes = await api.push.getVapidPublicKey()
-    if (!keyRes.success) throw new Error('Push notifications are not configured on the server')
-
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(keyRes.data.publicKey) as BufferSource,
-    })
-    const json = sub.toJSON()
-    if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
-      throw new Error('Push subscription is missing required fields')
+    let reg: ServiceWorkerRegistration
+    try {
+      reg = await navigator.serviceWorker.ready
+    } catch (err) {
+      console.error('[push] service worker not ready', err)
+      setError(describeError(err, 'Service Workerの準備に失敗'))
+      return
     }
-    await api.push.subscribe({
-      endpoint: json.endpoint,
-      keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
-    })
-    setSubscribed(true)
+
+    let publicKey: string
+    try {
+      const keyRes = await api.push.getVapidPublicKey()
+      if (!keyRes.success) throw new Error(keyRes.error)
+      publicKey = keyRes.data.publicKey
+    } catch (err) {
+      console.error('[push] vapid key fetch failed', err)
+      setError(describeError(err, 'VAPID鍵の取得に失敗'))
+      return
+    }
+
+    let endpoint: string, p256dh: string, auth: string
+    try {
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
+      })
+      const json = sub.toJSON()
+      if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+        throw new Error('ブラウザから購読情報を取得できませんでした')
+      }
+      endpoint = json.endpoint
+      p256dh = json.keys.p256dh
+      auth = json.keys.auth
+    } catch (err) {
+      console.error('[push] pushManager.subscribe failed', err)
+      setError(describeError(err, 'ブラウザの購読作成に失敗'))
+      return
+    }
+
+    try {
+      const subscribeRes = await api.push.subscribe({ endpoint, keys: { p256dh, auth } })
+      if (!subscribeRes.success) throw new Error(subscribeRes.error)
+      setSubscribed(true)
+    } catch (err) {
+      console.error('[push] server registration failed', err)
+      setError(describeError(err, 'サーバーへの登録に失敗'))
+      setSubscribed(false)
+    }
   }
 
   async function unsubscribe(): Promise<void> {
-    const reg = await navigator.serviceWorker.ready
-    const sub = await reg.pushManager.getSubscription()
-    if (sub) {
-      await api.push.unsubscribe(sub.endpoint)
-      await sub.unsubscribe()
+    setError(null)
+    try {
+      const reg = await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.getSubscription()
+      if (sub) {
+        await api.push.unsubscribe(sub.endpoint)
+        await sub.unsubscribe()
+      }
+      setSubscribed(false)
+    } catch (err) {
+      console.error('[push] unsubscribe failed', err)
+      setError(err instanceof Error ? err.message : '通知の解除に失敗しました')
     }
-    setSubscribed(false)
   }
 
-  return { permission, subscribed, subscribe, unsubscribe }
+  return { permission, subscribed, error, subscribe, unsubscribe }
 }
